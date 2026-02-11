@@ -19,6 +19,41 @@ import cv2
 import numpy as np
 from insightface.app import FaceAnalysis
 
+def load_students_database(config_path="./src/config/students.json"):
+    """
+    Load students database from JSON configuration file
+    
+    Args:
+        config_path: Path to the students configuration JSON file
+        
+    Returns:
+        dict: Students database mapping
+    """
+    try:
+        # Try multiple possible paths
+        possible_paths = [
+            config_path,
+            "./config/students.json",
+            os.path.join(os.path.dirname(__file__), "config", "students.json"),
+            os.path.join(os.path.dirname(__file__), "..", "src", "config", "students.json")
+        ]
+        
+        students_db = None
+        for path in possible_paths:
+            if os.path.exists(path):
+                with open(path, 'r') as f:
+                    data = json.load(f)
+                students_db = data.get("students", {})
+                print(f"[INFO] Loaded students database from: {path}")
+                break
+        
+            
+        return students_db
+        
+    except Exception as e:
+        print(f"[ERROR] Failed to load students database: {e}")
+        
+
 def load_embeddings(path):
     with open(path, "rb") as f:
         data = pickle.load(f)
@@ -50,6 +85,58 @@ def calibrate_if_needed(emb_path, threshold_path, auto_calibrate):
         return res["threshold"]
     else:
         return load_threshold(threshold_path)
+
+def initialize_recognition_system(embeddings_path=None, 
+                                threshold_path=None,
+                                auto_calibrate=True):
+    """
+    Initialize the complete face recognition system with embeddings and threshold
+    
+    Args:
+        embeddings_path: Path to embeddings pickle file (auto-detected if None)
+        threshold_path: Path to threshold pickle file (auto-detected if None)
+        auto_calibrate: Whether to auto-calibrate threshold if needed
+        
+    Returns:
+        tuple: (embeddings_db, names_db, threshold) or (None, None, None) on error
+    """
+    try:
+        print("[INFO] Initializing face recognition system...")
+        
+        # Auto-detect paths if not provided
+        if embeddings_path is None:
+            possible_emb_paths = [
+                "./outputs/embeddings.pickle",
+                "./src/outputs/embeddings.pickle",
+                os.path.join(os.path.dirname(__file__), "outputs", "embeddings.pickle")
+            ]
+            embeddings_path = next((p for p in possible_emb_paths if os.path.exists(p)), possible_emb_paths[0])
+        
+        if threshold_path is None:
+            possible_thresh_paths = [
+                "./outputs/threshold.pickle", 
+                "./src/outputs/threshold.pickle",
+                os.path.join(os.path.dirname(__file__), "outputs", "threshold.pickle")
+            ]
+            threshold_path = next((p for p in possible_thresh_paths if os.path.exists(p)), possible_thresh_paths[0])
+        
+        # Load embeddings
+        embeddings_db, names_db = load_embeddings(embeddings_path)
+        print(f"[INFO] Loaded {len(embeddings_db)} embeddings for {len(set(names_db))} unique persons")
+        
+        # Load or calibrate threshold
+        threshold = calibrate_if_needed(embeddings_path, threshold_path, auto_calibrate)
+        if threshold is None or threshold < 0.4:
+            print("[WARN] Using conservative default threshold 0.5")
+            threshold = 0.5
+        else:
+            print(f"[INFO] Using threshold: {threshold}")
+        
+        return embeddings_db, names_db, threshold
+        
+    except Exception as e:
+        print(f"[ERROR] Failed to initialize recognition system: {str(e)}")
+        return None, None, None
 
 def per_name_max_similarity(embs_db, names_db, query_emb):
     # normalize
@@ -86,6 +173,96 @@ def annotate_and_save(img_bgr, results, out_path):
         cv2.putText(img, label, (x+2, ly-2), font, fs, (0,0,0), th)
     cv2.imwrite(out_path, img)
     return out_path
+
+def process_image_for_api(img_bgr, embs_db, names_db, threshold, ctx_id=-1, model_name="buffalo_l", students_config_path='./src/config/students.json'):
+    """
+    Process image for API usage - returns JSON-compatible results without saving files
+    
+    Args:
+        img_bgr: OpenCV image in BGR format
+        embs_db: Embeddings database
+        names_db: Names corresponding to embeddings
+        threshold: Similarity threshold for recognition
+        ctx_id: Context ID for face analysis (-1 for CPU, 0+ for GPU)
+        model_name: InsightFace model name
+        students_config_path: Path to students JSON config file (optional)
+    
+    Returns:
+        dict: JSON-compatible results
+    """
+    try:
+        # Load dynamic students database
+        students_db = load_students_database(students_config_path)
+        
+        
+        # Initialize detector & embedder (FaceAnalysis)
+        app = FaceAnalysis(name=model_name)
+        app.prepare(ctx_id=ctx_id)
+
+        # Convert to RGB for InsightFace
+        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+
+        faces = app.get(img_rgb)
+        results = []
+        for f in faces:
+            # bbox -> x1,y1,x2,y2 (float)
+            x1, y1, x2, y2 = f.bbox.astype(int)
+            x1, y1 = max(0, x1), max(0, y1)
+            w = x2 - x1
+            h = y2 - y1
+            # embedding
+            emb = np.array(f.embedding, dtype=np.float32)
+            emb = emb / (np.linalg.norm(emb) + 1e-12)
+
+            # per-name best similarity
+            best_name, best_sim = per_name_max_similarity(embs_db, names_db, emb)
+
+            # decide
+            if best_sim >= threshold:
+                # known - use dynamic students database
+                student = students_db.get(best_name, {"name": best_name, "emp_id": None,})
+                identified_name = student["name"]
+                identified_emp_id = student["emp_id"]
+                results.append({
+                    "emp_id": identified_emp_id,
+                    "name": identified_name,
+                    "confidence": float(best_sim),
+                    "distance": float(1.0 - best_sim),
+                    "bbox": [int(x1), int(y1), int(w), int(h)]
+                })
+            else:
+                results.append({
+                    "emp_id": None,
+                    "name": "unknown",
+                    "confidence": float(best_sim),
+                    "distance": float(1.0 - best_sim),
+                    "bbox": [int(x1), int(y1), int(w), int(h)]
+                })
+
+        output = {
+            "status": "success",
+            "total_faces": len(results),
+            "known_faces": len([r for r in results if r["name"] != "unknown"]),
+            "unknown_faces": len([r for r in results if r["name"] == "unknown"]),
+            "threshold_used": float(threshold),
+            "students_loaded": len(students_db) if students_db else 0,
+            "recognized": results
+        }
+        
+        return output
+        
+    except Exception as e:
+        print(f"[ERROR] Error in process_image_for_api: {str(e)}")
+        return {
+            "status": "error",
+            "message": f"Error processing image: {str(e)}",
+            "total_faces": 0,
+            "known_faces": 0,
+            "unknown_faces": 0,
+            "threshold_used": float(threshold) if threshold else 0.5,
+            "students_loaded": 0,
+            "recognized": []
+        }
 
 def main():
     ap = argparse.ArgumentParser()
@@ -144,16 +321,17 @@ def main():
 
         # decide
         if best_sim >= threshold:
-            # known
-            # fetch student info mapping (your STUDENTS_DB mapping)
-            STUDENTS_DB = {"yosif": {"name": "yosif_yasir", "emp_id": "yosif"}}  # replace/extend with real mapping
-            student = STUDENTS_DB.get(best_name, {"name": best_name, "emp_id": None})
+            # known - use dynamic students database
+            students_db = load_students_database()
+            student = students_db.get(best_name, {"name": best_name, "emp_id": None})
             identified_name = student["name"]
             identified_emp_id = student["emp_id"]
             box_color = (0,255,0)
             results.append({
                 "emp_id": identified_emp_id,
                 "name": identified_name,
+                "department": student.get("department"),
+                "year": student.get("year"),
                 "confidence": float(best_sim),
                 "distance": float(1.0 - best_sim),  # for convenience keep a distance-like number
                 "bbox": [int(x1), int(y1), int(w), int(h)]
@@ -162,6 +340,8 @@ def main():
             results.append({
                 "emp_id": None,
                 "name": "unknown",
+                "department": None,
+                "year": None,
                 "confidence": float(best_sim),
                 "distance": float(1.0 - best_sim),
                 "bbox": [int(x1), int(y1), int(w), int(h)]
