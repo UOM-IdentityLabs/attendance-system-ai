@@ -34,7 +34,7 @@ def pairwise_similarities(embs, names):
             labels.append(1 if names[i]==names[j] else 0)
     return np.array(sims), np.array(labels)
 
-def find_best_threshold(sims, labels, low=0.2, high=0.95, step=0.003):
+def find_best_threshold(sims, labels, low=0.3, high=0.95, step=0.003):
     best = {"threshold": 0.5, "f1": -1}
     threshs = np.arange(low, high, step)
     for t in threshs:

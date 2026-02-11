@@ -111,8 +111,8 @@ def main():
         print(f"[INFO] Using manual threshold {threshold}")
     else:
         threshold = calibrate_if_needed(args.embeddings, args.threshold_file, auto_calibrate=bool(args.auto_calibrate))
-        if threshold is None:
-            print("[WARN] No threshold found; falling back to default 0.5")
+        if threshold is None or threshold < 0.4:
+            print("[WARN] No threshold found or threshold too low; using conservative default 0.5")
             threshold = 0.5
         else:
             print(f"[INFO] Using calculated threshold {threshold}")
