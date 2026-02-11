@@ -1,0 +1,12 @@
+{
+  "students": {
+    "yosif_yasir": {
+      "name": "yosif_yasir",
+      "emp_id": "yosif@gmail.com"
+    },
+    "abdullah_omar": {
+      "name": "abdullah_omar",
+      "emp_id": "abdullah@gmail.com"
+    }
+  }
+}
