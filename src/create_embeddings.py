@@ -17,8 +17,8 @@ from insightface.app import FaceAnalysis
 import cv2
 
 def build_embeddings(dataset_dir, out_path, ctx_id=0, model_name="buffalo_l"):
-    app = FaceAnalysis(name=model_name)     # "buffalo_l" is accurate and stable; "antelopev2" is faster with similar perf
-    app.prepare(ctx_id=ctx_id)              # ctx_id=0 for GPU, -1 for CPU
+    app = FaceAnalysis(name=model_name)
+    app.prepare(ctx_id=ctx_id)
 
     imagePaths = list(paths.list_images(dataset_dir))
     embeddings = []
@@ -39,11 +39,9 @@ def build_embeddings(dataset_dir, out_path, ctx_id=0, model_name="buffalo_l"):
             print("[WARN] no face detected, skipping:", imagePath)
             continue
 
-        # Choose the largest face if multiple (typical for training images)
         face = max(faces, key=lambda f: (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]))
-        emb = face.embedding  # already normalized in recent insightface versions (but we normalize again to be safe)
+        emb = face.embedding
         emb = np.asarray(emb, dtype=np.float32)
-        # normalize
         norm = np.linalg.norm(emb)
         if norm > 0:
             emb = emb / norm

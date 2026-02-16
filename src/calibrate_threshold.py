@@ -22,7 +22,6 @@ def load_embeddings(path):
     return embs, names
 
 def pairwise_similarities(embs, names):
-    # compute pairwise cosine similarities
     embs_norm = embs / np.linalg.norm(embs, axis=1, keepdims=True)
     sim_matrix = embs_norm @ embs_norm.T
     n = embs.shape[0]

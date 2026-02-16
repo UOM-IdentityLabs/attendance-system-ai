@@ -30,7 +30,6 @@ def load_students_database(config_path="./src/config/students.json"):
         dict: Students database mapping
     """
     try:
-        # Try multiple possible paths
         possible_paths = [
             config_path,
             "./config/students.json",
@@ -79,7 +78,6 @@ def calibrate_if_needed(emb_path, threshold_path, auto_calibrate):
     emb_m = os.path.getmtime(emb_path)
     if not os.path.exists(threshold_path) or os.path.getmtime(threshold_path) < emb_m:
         print("[INFO] threshold missing or outdated, auto-calibrating...")
-        # call the calibrator function inline for simplicity
         from calibrate_threshold import calibrate
         res = calibrate(emb_path, threshold_path)
         return res["threshold"]
@@ -103,7 +101,6 @@ def initialize_recognition_system(embeddings_path=None,
     try:
         print("[INFO] Initializing face recognition system...")
         
-        # Auto-detect paths if not provided
         if embeddings_path is None:
             possible_emb_paths = [
                 "./outputs/embeddings.pickle",
@@ -120,11 +117,9 @@ def initialize_recognition_system(embeddings_path=None,
             ]
             threshold_path = next((p for p in possible_thresh_paths if os.path.exists(p)), possible_thresh_paths[0])
         
-        # Load embeddings
         embeddings_db, names_db = load_embeddings(embeddings_path)
         print(f"[INFO] Loaded {len(embeddings_db)} embeddings for {len(set(names_db))} unique persons")
         
-        # Load or calibrate threshold
         threshold = calibrate_if_needed(embeddings_path, threshold_path, auto_calibrate)
         if threshold is None or threshold < 0.4:
             print("[WARN] Using conservative default threshold 0.5")
@@ -139,18 +134,15 @@ def initialize_recognition_system(embeddings_path=None,
         return None, None, None
 
 def per_name_max_similarity(embs_db, names_db, query_emb):
-    # normalize
     query = query_emb / (np.linalg.norm(query_emb) + 1e-12)
     embs_norm = embs_db / (np.linalg.norm(embs_db, axis=1, keepdims=True) + 1e-12)
     sims = embs_norm @ query
-    # compute per-name max
     per_name = {}
     for sim, name in zip(sims, names_db):
         if name not in per_name or sim > per_name[name]:
             per_name[name] = float(sim)
-    # pick best
     best_name = max(per_name.items(), key=lambda kv: kv[1])
-    return best_name  # (name, similarity)
+    return best_name
 
 def annotate_and_save(img_bgr, results, out_path):
     img = img_bgr.copy()
@@ -191,35 +183,26 @@ def process_image_for_api(img_bgr, embs_db, names_db, threshold, ctx_id=-1, mode
         dict: JSON-compatible results
     """
     try:
-        # Load dynamic students database
         students_db = load_students_database(students_config_path)
         
-        
-        # Initialize detector & embedder (FaceAnalysis)
         app = FaceAnalysis(name=model_name)
         app.prepare(ctx_id=ctx_id)
 
-        # Convert to RGB for InsightFace
         img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
 
         faces = app.get(img_rgb)
         results = []
         for f in faces:
-            # bbox -> x1,y1,x2,y2 (float)
             x1, y1, x2, y2 = f.bbox.astype(int)
             x1, y1 = max(0, x1), max(0, y1)
             w = x2 - x1
             h = y2 - y1
-            # embedding
             emb = np.array(f.embedding, dtype=np.float32)
             emb = emb / (np.linalg.norm(emb) + 1e-12)
 
-            # per-name best similarity
             best_name, best_sim = per_name_max_similarity(embs_db, names_db, emb)
 
-            # decide
             if best_sim >= threshold:
-                # known - use dynamic students database
                 student = students_db.get(best_name, {"name": best_name, "emp_id": None,})
                 identified_name = student["name"]
                 identified_emp_id = student["emp_id"]
@@ -276,12 +259,10 @@ def main():
     ap.add_argument("--model", default="buffalo_l")
     args = ap.parse_args()
 
-    # Load DB
     embs_db, names_db = load_embeddings(args.embeddings)
     if len(embs_db) == 0:
         raise RuntimeError("No embeddings in DB")
 
-    # Determine threshold
     threshold = None
     if args.manual_threshold is not None:
         threshold = args.manual_threshold
@@ -294,11 +275,9 @@ def main():
         else:
             print(f"[INFO] Using calculated threshold {threshold}")
 
-    # Initialize detector & embedder (FaceAnalysis)
     app = FaceAnalysis(name=args.model)
     app.prepare(ctx_id=args.ctx)
 
-    # Load image
     img_bgr = cv2.imread(args.image)
     if img_bgr is None:
         raise ValueError("Could not read image: " + args.image)
@@ -307,21 +286,16 @@ def main():
     faces = app.get(img_rgb)
     results = []
     for f in faces:
-        # bbox -> x1,y1,x2,y2 (float)
         x1, y1, x2, y2 = f.bbox.astype(int)
         x1, y1 = max(0, x1), max(0, y1)
         w = x2 - x1
         h = y2 - y1
-        # embedding
         emb = np.array(f.embedding, dtype=np.float32)
         emb = emb / (np.linalg.norm(emb) + 1e-12)
 
-        # per-name best similarity
         best_name, best_sim = per_name_max_similarity(embs_db, names_db, emb)
 
-        # decide
         if best_sim >= threshold:
-            # known - use dynamic students database
             students_db = load_students_database()
             student = students_db.get(best_name, {"name": best_name, "emp_id": None})
             identified_name = student["name"]
@@ -333,7 +307,7 @@ def main():
                 "department": student.get("department"),
                 "year": student.get("year"),
                 "confidence": float(best_sim),
-                "distance": float(1.0 - best_sim),  # for convenience keep a distance-like number
+                "distance": float(1.0 - best_sim),
                 "bbox": [int(x1), int(y1), int(w), int(h)]
             })
         else:
@@ -355,11 +329,9 @@ def main():
         "recognized": results
     }
 
-    # Annotate & save
     annotated_path = annotate_and_save(img_bgr, results, args.out)
     print(f"Annotated image saved: {annotated_path}")
 
-    # Print & save JSON output (api-friendly)
     out_json = os.path.splitext(args.out)[0] + ".json"
     with open(out_json, "w") as f:
         json.dump(output, f, indent=2)
