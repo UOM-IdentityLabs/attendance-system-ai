@@ -1,0 +1,12 @@
+# Core dependencies for face recognition attendance system
+flask>=2.0.0
+werkzeug>=2.0.0
+opencv-python>=4.5.0
+numpy>=1.21.0
+insightface>=0.7.3
+scikit-learn>=1.0.0
+imutils>=0.5.4
+
+# Additional dependencies that might be needed
+pillow>=8.0.0
+onnxruntime>=1.10.0
